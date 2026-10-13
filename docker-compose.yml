@@ -1,0 +1,87 @@
+# Development stack. Data lives in bind mounts under ./.data (no Docker volumes).
+# Overrides: put variables from .env.example into .env.
+
+x-django-env: &django-env
+  SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-key}
+  DEBUG: ${DEBUG:-true}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,web}
+  DATABASE_URL: postgres://${POSTGRES_USER:-openride}:${POSTGRES_PASSWORD:-openride}@db:5432/${POSTGRES_DB:-openride}
+  REDIS_URL: redis://redis:6379/0
+  VIDEO_ASSUMED_KMH: ${VIDEO_ASSUMED_KMH:-25}
+  # admin links go to the Vite dev server
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+
+services:
+  db:
+    image: postgres:16.10
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-openride}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openride}
+      POSTGRES_DB: ${POSTGRES_DB:-openride}
+    volumes:
+      - ./.data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7.4.5
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: web
+    # entrypoint migrates first; the dev server reloads on code changes from the bind mounts
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    environment: *django-env
+    volumes:
+      - ./backend:/app/backend
+      - ./pipeline:/app/pipeline
+      - ./.data/media:/data/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: worker
+    environment: *django-env
+    volumes:
+      - ./backend:/app/backend
+      - ./pipeline:/app/pipeline
+      - ./.data/media:/data/media
+      - ./.data/cache:/data/cache
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: oven/bun:1.4.3
+    working_dir: /app
+    command: ["sh", "-c", "bun install --frozen-lockfile && exec bun run dev --host 0.0.0.0 --port 5173"]
+    environment:
+      VITE_API_PROXY: http://web:8000
+    volumes:
+      - ./frontend:/app
+      # Linux node_modules (native esbuild/rollup binaries) must not mix with the host's
+      - ./.data/frontend-node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - web

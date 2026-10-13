@@ -1,0 +1,96 @@
+/* Tokens are hex: gradeColor() mixes them numerically. */
+:root {
+  color-scheme: light;
+  --bg: #fcfcfb;
+  --surface: #fcfcfb;
+  --surface-2: #f3f2ef;
+  --panel: rgba(252, 252, 251, 0.85);
+  --panel-solid: #f3f2ef;
+  --line: #e5e4df;
+  --grid: #e5e4df;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --muted: #8a8984;
+  --climb: #e34948;
+  --descent: #2a78d6;
+  --flat: #b9b8b2;
+  --accent: #eb6834;
+  --cursor: #0b0b0b;
+  --shade: rgba(11, 11, 11, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0e0e0d;
+    --surface: #1a1a19;
+    --surface-2: #242422;
+    --panel: rgba(16, 16, 15, 0.72);
+    --panel-solid: #1a1a19;
+    --line: #33332f;
+    --grid: #33332f;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --muted: #8f8e88;
+    --climb: #e66767;
+    --descent: #3987e5;
+    --flat: #6b6a65;
+    --accent: #d95926;
+    --cursor: #f0efec;
+    --shade: rgba(240, 239, 236, 0.12);
+  }
+}
+
+/* Trainer HUD sits on video / 3D scene, so it is dark regardless of the system theme. */
+:root[data-theme='dark'],
+.theme-dark {
+  color-scheme: dark;
+  --bg: #0e0e0d;
+  --surface: #1a1a19;
+  --surface-2: #242422;
+  --panel: rgba(16, 16, 15, 0.72);
+  --panel-solid: #1a1a19;
+  --line: #3a3a37;
+  --grid: #33332f;
+  --text: #f0efec;
+  --text-2: #c3c2b7;
+  --muted: #8f8e88;
+  --climb: #e66767;
+  --descent: #3987e5;
+  --flat: #6b6a65;
+  --accent: #d95926;
+  --cursor: #f0efec;
+  --shade: rgba(0, 0, 0, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    15px/1.4 system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.k {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}

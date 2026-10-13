@@ -1,0 +1,85 @@
+[project]
+name = "openride"
+version = "0.1.0"
+description = "Indoor cycling trainer: routes with elevation profiles, optionally synced YouTube videos"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "django>=5.2,<6",
+    "djangorestframework>=3.16",
+    "django-dramatiq>=0.14",
+    "dramatiq[redis]>=1.18",
+    "django-environ>=0.12",
+    "gunicorn>=23",
+    "numpy>=2.2",
+    "psycopg[binary]>=3.2",
+    "scipy>=1.15",
+    "whitenoise>=6.9",
+]
+
+[dependency-groups]
+pipeline = [
+    # JS runtime for yt-dlp: YouTube extraction without one is deprecated and misses formats
+    "deno>=2.5",
+    "onnxruntime>=1.22",
+    "opencv-python-headless>=4.11",
+    "rapidocr>=3.10",
+    "yt-dlp[default]>=2025.11.12",
+]
+video = [
+    "geocalib",
+    # no linux/aarch64 wheels (and no sdist): on ARM hosts grade_source=video needs an amd64 worker
+    "pycolmap>=3.11; sys_platform != 'linux' or platform_machine == 'x86_64'",
+    "torch>=2.6",
+    "torchvision>=0.21",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.10",
+    "pytest-env>=1.1",
+    "ruff>=0.11",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+# pipeline/ is the only installable module; backend/ runs from its own directory via manage.py
+[tool.uv.build-backend]
+module-name = "pipeline"
+module-root = ""
+
+[tool.uv]
+default-groups = "all"
+# GeoCalib pins the GUI OpenCV build; the headless wheel provides the same cv2 module without libGL
+exclude-dependencies = ["opencv-python"]
+
+[tool.uv.sources]
+geocalib = { git = "https://github.com/cvg/GeoCalib" }
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["frontend", "research"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "DJ"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pipeline", "config", "routes"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+pythonpath = ["backend"]
+testpaths = ["tests"]
+env = [
+    "DATABASE_URL=sqlite://:memory:",
+    "SECRET_KEY=test",
+    "REDIS_URL=redis://localhost:6379/0",
+]

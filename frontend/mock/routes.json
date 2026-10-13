@@ -1,0 +1,37 @@
+[
+ {
+  "id": 1,
+  "title": "Fear The Deer – Deer Creek Rd, Malibu",
+  "distance_km": 3.73,
+  "elev_gain_m": 0,
+  "elev_loss_m": 415,
+  "max_grade": 0.8,
+  "video": {
+   "source": "youtube",
+   "source_id": "4Mmx8soDJ6s",
+   "duration_s": 227
+  }
+ },
+ {
+  "id": 2,
+  "title": "South Tyrol – GPX napárované bez OCR",
+  "distance_km": 15.94,
+  "elev_gain_m": 91,
+  "elev_loss_m": 467,
+  "max_grade": 9.3,
+  "video": {
+   "source": "youtube",
+   "source_id": "QEI8NBHlwSE",
+   "duration_s": 1859
+  }
+ },
+ {
+  "id": 3,
+  "title": "South Tyrol – virtuální trasa (bez videa)",
+  "distance_km": 15.94,
+  "elev_gain_m": 91,
+  "elev_loss_m": 467,
+  "max_grade": 9.3,
+  "video": null
+ }
+]

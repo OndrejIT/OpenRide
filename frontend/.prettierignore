@@ -1,0 +1,4 @@
+dist
+mock
+node_modules
+bun.lock

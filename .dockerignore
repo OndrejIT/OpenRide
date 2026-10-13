@@ -1,0 +1,11 @@
+# allowlist: secrets (.env), bind-mounted data and host-built artefacts stay out of the image
+**
+!pyproject.toml
+!uv.lock
+!pipeline/
+!backend/
+!docker/web-entrypoint.sh
+!frontend/
+frontend/node_modules
+frontend/dist
+**/__pycache__
