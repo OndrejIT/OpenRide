@@ -261,7 +261,8 @@ def test_enqueue_marks_queued_and_reverts_when_the_broker_is_down(climb_gpx):
     video = Video.objects.create(route=make_route(climb_gpx), source_id="4Mmx8soDJ6s", status=Video.Status.READY)
     with mock.patch.object(tasks.process_video, "send_with_options") as send:
         tasks.enqueue(video)
-    assert send.call_args.kwargs["args"] == (video.pk,)
+    video.refresh_from_db()
+    assert send.call_args.kwargs["args"] == (video.pk, video.task_token) and len(video.task_token) == 32
     assert Video.objects.get(pk=video.pk).status == Video.Status.QUEUED
     with (
         mock.patch.object(tasks.process_video, "send_with_options", side_effect=ConnectionError),
@@ -376,6 +377,37 @@ def test_process_video_failure_is_recorded_with_the_step(climb_gpx):
     assert video.error == "stahování videa: RuntimeError: HTTP 403"
 
 
+def test_stopped_video_ends_its_running_task(climb_gpx):
+    from pipeline.progress import report
+
+    video = Video.objects.create(route=make_route(climb_gpx), source_id="4Mmx8soDJ6s", task_token="t")
+
+    def download(*args, **kwargs):
+        report("stahování videa", 1, 10)
+        tasks.cancel(Video.objects.get(pk=video.pk))  # the admin stops it while it runs
+        report("OCR overlaye", 2, 10)
+        raise AssertionError("not reached")
+
+    with mock.patch("pipeline.download.download", side_effect=download):
+        tasks.process_video.fn(video.pk, "t")  # ends quietly, the worker is free for the next video
+    video.refresh_from_db()
+    assert video.status == Video.Status.FAILED and video.error == "ukončeno ručně" and video.task_token != "t"
+    assert not tasks.cancel(video)  # nothing left to stop
+
+
+def test_failure_of_a_stopped_task_does_not_touch_the_restarted_video(climb_gpx):
+    video = Video.objects.create(route=make_route(climb_gpx), source_id="4Mmx8soDJ6s", task_token="t")
+
+    def download(*args, **kwargs):
+        tasks.cancel(Video.objects.get(pk=video.pk))
+        Video.objects.filter(pk=video.pk).update(status=Video.Status.QUEUED, task_token="new")  # sent again
+        raise RuntimeError("HTTP 403")
+
+    with mock.patch("pipeline.download.download", side_effect=download), pytest.raises(RuntimeError):
+        tasks.process_video.fn(video.pk, "t")
+    assert Video.objects.get(pk=video.pk).status == Video.Status.QUEUED
+
+
 def test_process_video_time_limit_is_recorded(climb_gpx):
     video = Video.objects.create(route=make_route(climb_gpx), source_id="4Mmx8soDJ6s")
     exc = dramatiq.middleware.TimeLimitExceeded()
@@ -391,7 +423,7 @@ def test_command_process_video(climb_gpx, capsys):
     with mock.patch.object(tasks.process_video, "send_with_options") as send:
         call_command("process_video", "--pending")
         call_command("process_video", str(b.pk))
-    assert [c.kwargs["args"] for c in send.call_args_list] == [(a.pk,), (b.pk,)]
+    assert [c.kwargs["args"][0] for c in send.call_args_list] == [a.pk, b.pk]
     with pytest.raises(CommandError):
         call_command("process_video", "999")
 
@@ -469,9 +501,37 @@ def test_admin_action_sends_videos_to_processing(admin, climb_gpx, model):
             {"action": "process", "_selected_action": ids},
             follow=True,
         )
-    assert [c.kwargs["args"] for c in send.call_args_list] == [(new.pk,)]
+    assert [c.kwargs["args"][0] for c in send.call_args_list] == [new.pk]
     html = r.content.decode()
     assert "Odesláno ke zpracování" in html and "přeskočeno" in html
+
+
+@pytest.mark.parametrize("model", ["video", "route"])
+def test_admin_actions_stop_and_restart_a_stuck_video(admin, climb_gpx, model):
+    stuck = Video.objects.create(
+        route=make_route(climb_gpx), source_id="aaaaaaaaaaa", status=Video.Status.PROCESSING, task_token="dead"
+    )
+    ids = [stuck.pk if model == "video" else stuck.route_id]
+    url = reverse(f"admin:routes_{model}_changelist")
+    with mock.patch.object(tasks.process_video, "send_with_options") as send:
+        r = admin.post(url, {"action": "restart", "_selected_action": ids}, follow=True)
+    assert [c.kwargs["args"][0] for c in send.call_args_list] == [stuck.pk]
+    assert "Odesláno ke zpracování" in r.content.decode()
+    stuck.refresh_from_db()
+    assert stuck.status == Video.Status.QUEUED and stuck.task_token not in ("dead", "")
+    r = admin.post(url, {"action": "stop", "_selected_action": ids}, follow=True)
+    assert "Ukončeno" in r.content.decode()
+    assert Video.objects.get(pk=stuck.pk).status == Video.Status.FAILED
+
+
+def test_admin_stop_button_on_the_video_detail(admin, climb_gpx):
+    video = Video.objects.create(route=make_route(climb_gpx), source_id="aaaaaaaaaaa", status=Video.Status.PROCESSING)
+    url = reverse("admin:routes_video_change", args=[video.pk])
+    assert 'name="_stop"' in admin.get(url).content.decode()
+    data = {"source": "youtube", "source_id": video.source_id, "data_source_id": "", "grade_source": "gpx"}
+    r = admin.post(url, {**data, "_stop": "1"}, follow=True)
+    assert "Ukončeno" in r.content.decode() and 'name="_stop"' not in r.content.decode()
+    assert Video.objects.get(pk=video.pk).status == Video.Status.FAILED
 
 
 def test_quality_rows_overlay():
@@ -489,3 +549,25 @@ def test_overlay_coverage_verdict_counts_only_the_fields_used():
     q = {"method": "overlay", "coverage": cov, "elev_source": "elev"}
     assert dict((label, v) for label, _, v in quality_rows(q))["přečteno z overlaye"] == "good"
     assert worst_verdict({**q, "elev_source": "grade"}) == "bad"  # elevation integrated from the poorly read grade
+
+
+def test_superseded_task_is_skipped(climb_gpx):
+    video = Video.objects.create(route=make_route(climb_gpx), source_id="4Mmx8soDJ6s", task_token="new")
+    with mock.patch("pipeline.download.download") as dl:
+        tasks.process_video.fn(video.pk, "old")
+        tasks.process_video.fn(video.pk)  # message from before tokens existed
+    dl.assert_not_called()
+    assert Video.objects.get(pk=video.pk).status == Video.Status.NEW
+
+
+def test_requeue_stuck_sends_active_videos_again(climb_gpx):
+    stuck = Video.objects.create(
+        route=make_route(climb_gpx), source_id="aaaaaaaaaaa", status=Video.Status.PROCESSING, task_token="old"
+    )
+    waiting = Video.objects.create(route=make_route(climb_gpx), source_id="bbbbbbbbbbb", status=Video.Status.QUEUED)
+    Video.objects.create(route=make_route(climb_gpx), source_id="ccccccccccc", status=Video.Status.READY)
+    with mock.patch.object(tasks.process_video, "send_with_options") as send:
+        call_command("requeue_stuck")
+    assert sorted(c.kwargs["args"][0] for c in send.call_args_list) == [stuck.pk, waiting.pk]
+    stuck.refresh_from_db()
+    assert stuck.status == Video.Status.QUEUED and stuck.task_token != "old"

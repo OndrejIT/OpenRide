@@ -90,3 +90,40 @@ Odešle video ke zpracování (i hotové nebo chybné, znovu).
 
 - `200`: video ve stavu `queued`
 - `409`: video už je ve frontě nebo se zpracovává
+
+### `POST /api/manage/videos/<id>/stop/`
+
+Ukončí čekající nebo běžící zpracování. Video přejde do stavu `failed` s chybou „ukončeno ručně“; běžící úloha skončí při svém nejbližším hlášení průběhu (do pár sekund) a worker je volný. Slouží i pro video, které visí jako „zpracovává se“ po pádu workeru nebo databáze. Pak ho jde poslat znovu přes `process/`.
+
+- `200`: video ve stavu `failed`
+- `409`: video nečeká ve frontě ani se nezpracovává
+
+## Jízdy (bez přihlášení, domácí síť)
+
+Záznam jízdy z trenažéru: jeden vzorek za sekundu, uloží se, až ho jezdec na konci potvrdí. Mazání jen v adminu.
+
+### `GET /api/rides/`
+
+Seznam jízd se souhrnem (bez vzorků): `id`, `route`, `title`, `started_at`, `duration_s`, `distance_m`, `elev_gain_m`, `avg_power`, `max_power`, `avg_rpm`, `avg_pulse`, `max_pulse`. Průměr kadence a tepu nepočítá stání a chybějící hodnoty.
+
+### `GET /api/rides/<id>/`
+
+Totéž plus `samples`.
+
+### `POST /api/rides/`
+
+```json
+{
+  "route": 3,
+  "started_at": "2026-10-14T17:05:00Z",
+  "samples": {
+    "t": [0, 1], "dist": [0.0, 7.1], "elev": [512.0, 512.1], "grade": [1.2, 1.3], "sim": [1.2, 1.3],
+    "brake": [8, 8], "power": [140, 152], "rpm": [82, 84], "pulse": [null, null]
+  }
+}
+```
+
+Všechny řady stejně dlouhé, 2 až 28 800 vzorků (8 h). `brake`, `power`, `rpm` a `pulse` smějí obsahovat `null` (trenažér chvíli nedostupný). `route` může být `null`.
+
+- `201`: uložená jízda se souhrnem
+- `400`: chybějící nebo nesouhlasné řady

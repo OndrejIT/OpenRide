@@ -1,6 +1,6 @@
 # OpenRide
 
-Indoor cyklistický trenažér v prohlížeči. YouTube video jízdy se napáruje na výškový profil trasy a během přehrávání ukazuje aktuální sklon v procentech, profil před jezdcem a odpor, který by šel do trenažéru. Trasy bez videa se jezdí jako virtuální průlet nad 3D terénem.
+Indoor cyklistický trenažér v prohlížeči. YouTube video jízdy se napáruje na výškový profil trasy; během přehrávání OpenRide podle sklonu řídí odpor trenažéru a ukazuje výkon, kadenci, sklon, zátěž a profil trasy obarvený zátěží. Odjeté jízdy se ukládají do historie. Trasy bez videa se jezdí jako virtuální průlet nad 3D terénem.
 
 Sklon a časování videa se počítají lokálně, bez placených služeb, z jednoho ze tří zdrojů:
 
@@ -10,7 +10,7 @@ Sklon a časování videa se počítají lokálně, bez placených služeb, z je
 | **GPX** | máš GPX trasy (Strava, plánovač) | GPX se napáruje na video podle zatáček; profil z GPX, mapa a 3D průlet |
 | **obraz** | nic z toho | sklon odhadnutý z obrazu (GeoCalib + SfM); nepřesné, jen orientační |
 
-Fáze 1 je prototyp: bez uživatelů a bez napojení na skutečný trenažér (odpor se jen zobrazuje). Zadání je v [SPEC.md](SPEC.md).
+Trenažér Kettler se připojuje přes most s ESP32 ([firmware/](firmware/README.md)): OpenRide podle sklonu nastavuje odpor, ukazuje výkon, kadenci a tep a pozastaví video, když přestaneš šlapat. Fáze 1 je bez uživatelů. Zadání je v [SPEC.md](SPEC.md).
 
 ## Architektura
 
@@ -53,29 +53,55 @@ docker compose exec web python manage.py createsuperuser
 |---|---|
 | http://localhost:5173/ | aplikace (Vite dev server, hot reload) |
 | http://localhost:5173/manage | správa videí: přidání a zpracování |
+| http://localhost:5173/trainer | trenažér: adresa mostu ESP32, výběr Kettleru, rozsah odporu |
+| http://localhost:5173/rides | odjeté jízdy: souhrn a průběh výkonu, kadence a tepu |
 | http://localhost:8000/admin/ | Django admin |
 | http://localhost:8000/ | sestavená aplikace servírovaná Djangem |
 
 Migrace proběhnou při startu kontejneru `web`. Všechny hodnoty v `docker-compose.yml` mají vývojové výchozí hodnoty, `.env` není potřeba (přehled proměnných níže).
 
+**Z tabletu v domácí síti** otevři `http://<IP počítače>:5173/` (Vite dev server; `/api` a `/admin` přeposílá na Django). Sestavená aplikace na portu 8000 navíc potřebuje IP nebo jméno počítače v `ALLOWED_HOSTS` (např. `.env`: `ALLOWED_HOSTS=localhost,127.0.0.1,web,<IP počítače>`). Stránka musí jít přes HTTP, aby mohla volat most trenažéru v lokální síti. Bez lišty Safari: **Sdílet → Přidat na plochu** (OpenRide se pak otevírá jako samostatná aplikace), nebo celá obrazovka na jízdní obrazovce (výchozí: sama při startu jízdy; v nastavení jde přepnout na tlačítko).
+
+Nastavení (ikona klíče vpravo nahoře) má i volbu vzhledu: **Auto** podle systému, **Tmavý**, **Světlý**.
+
 ## Práce s aplikací
 
 1. Otevři **/manage** a přihlas se účtem správce (odkaz vede na přihlášení do adminu a zpět).
 2. **Přidat video**: vlož URL z YouTube (název se doplní sám), zvol výpočet sklonu, případně nahraj GPX. Volitelně „URL videa pro zpracování“: jiná verze stejné jízdy, ze které se data počítají (typicky verze s overlayem cyklopočítače, zatímco přehrává se čistá verze bez něj; časový posun mezi verzemi se zjistí a ověří automaticky).
-3. Nech zaškrtnuté **hned zpracovat**, nebo později klikni **Zpracovat**. V seznamu uvidíš krok, procenta a odhad zbývajícího času.
+3. Nech zaškrtnuté **hned zpracovat**, nebo později klikni **Zpracovat**. V seznamu uvidíš krok, procenta a odhad zbývajícího času; právě zpracovávané video je vždy nahoře. Filtr nad seznamem: **Vše**, **Čeká na zpracování**, **Selhalo**, **Hotové**. **Ukončit** zastaví čekající nebo běžící zpracování (i video, které po pádu workeru visí jako „zpracovává se“); pak ho jde pustit znovu.
 4. Po dokončení zkontroluj **verdikt kvality** (✓ / ⚠ / ✗ s tabulkou metrik) a stránku **kontrola** (`/check/<id>`: video, profil v čase a mapa vedle sebe). Pak jeď v **trenažéru** (`/ride/<id>`).
 
-Totéž jde v Django adminu: **Videa → Přidat**, tlačítko „Uložit a zpracovat“, akce „Zpracovat vybraná videa“. **Trasy → Přidat** slouží jen pro trasy bez videa (GPX povinné). Z příkazové řádky: `docker compose exec web python manage.py process_video <id>` nebo `--pending`.
+Na úvodní stránce jde seznam tras filtrovat podle délky jízdy (do 30 min až přes 90 min) a terénu (rovina, zvlněné, kopcovité, stoupání, sjezd podle převýšení na km).
 
-### Trenažér
+Totéž jde v Django adminu: **Videa → Přidat**, tlačítka „Uložit a zpracovat“ a „Ukončit zpracování“, akce „Zpracovat“, „Ukončit zpracování“ a „Ukončit a zpracovat znovu“. U videí je odkaz rovnou na YouTube. **Trasy → Přidat** slouží jen pro trasy bez videa (GPX povinné). Z příkazové řádky: `docker compose exec web python manage.py process_video <id>` nebo `--pending`.
+
+### Jízda (`/ride/<id>`)
+
+Video běží přes celou obrazovku, okraje se podle tvaru displeje oříznou; v nastavení jde přepnout na celé video s černými pruhy (u trasy bez videa 3D průlet), přes něj karty a ovládání. Rozložení vychází z Zwiftu a FulGazu: úsilí vlevo, terén uprostřed, to, na co se za jízdy sahá, vpravo.
+
+| Místo | Co |
+|---|---|
+| vlevo nahoře | **Výkon** (W), kadence a tep (tep jen se snímačem); **Čas** / celkem; **Vzdálenost** / celkem |
+| uprostřed nahoře | **Stoupání** teď a průměr dalších 500 m |
+| vpravo nahoře | **Zátěž**: úroveň brzdy v barvě zátěže, 10 sloupečků, − / + přitvrzení (podržením rychle). Klepnutí na číslo otevře obtížnost a stav Kettleru. |
+| dole | profil trasy, plocha pod křivkou obarvená zátěží (zelená → červená); zoom a posun, kliknutím skok |
+| uprostřed | ⏪ ▶ ⏩ (jen s ovládáním) |
+| vpravo dole | ■ ukončit jízdu, ← trasy, celá obrazovka (když se nespouští sama), 🔧 nastavení (jen s ovládáním) |
 
 | Ovládání | |
 |---|---|
-| mezera | start / pauza |
-| ← / → | ±10 s (bez videa ±100 m) |
+| klepnutí do obrazu | ukáže ovládání na 3 s (za pauzy je vidět pořád) |
+| dvojklepnutí do obrazu, mezera | start / pauza |
+| ⏪ ⏩, ← / → | skok 10 s (bez videa 100 m); další stisky stejným směrem do 1,5 s skáčou dál: 20 s, 30 s, 1 min, 2 min |
 | ↑ / ↓ | obtížnost |
+| H | při jízdě jen video |
+| G | skrýt / ukázat profil trasy |
 
-HUD ukazuje sklon a průměr dalších 500 m, odpor (simulovaný sklon = sklon × obtížnost, sjezdy ×0,5, minimum −5 %, úroveň 0–10), čas, vzdálenost, výšku, rychlost, profil dalších 500 m, profil celé trasy (kliknutím skok) a minimapu. U trasy bez videa se pozice posouvá podle rychlosti z posuvníku.
+Nastavení (🔧): obtížnost, přitvrzení brzdy, pozastavení videa, když nešlapeš; vzhled: průhlednost karet (0 % = jen čísla na videu), video přes celou obrazovku (ořízne okraje) nebo celé s pruhy, celá obrazovka při startu jízdy, velká čísla a tlačítka, jen video při jízdě.
+
+**Odpor**: simulovaný sklon = sklon × obtížnost (sjezdy ×0,5), −5 % až +15 % se rozloží na zvolený rozsah úrovní brzdy (výchozí 5–18, stránka **Trenažér**). Přitvrzení přičte k úrovni pevný počet (až o celou stupnici Kettleru); výsledek se vždy ořízne na limity, které Kettler nahlásí. Video se po 2 s bez šlapání pozastaví a šlapáním se zase pustí. Most nastavíš podle [firmware/README.md](firmware/README.md); prohlížeč ho volá přímo v domácí síti.
+
+**Záznam jízdy**: jeden vzorek za sekundu (vzdálenost, výška, sklon, brzda, výkon, kadence, tep). Na konci trasy nebo po ■ se ukáže souhrn s volbou **Uložit** / **Zahodit** / **Pokračovat**; uložené jízdy jsou v **Odjeté jízdy** (`/rides`). Odchod z neuložené jízdy se nejdřív zeptá.
 
 ### Jak číst kvalitu výsledku
 
@@ -128,8 +154,9 @@ bun run lint && bun run typecheck && bun run test && bun run build
 ```
 backend/                 Django projekt
   config/                settings (django-environ), urls
-  routes/                modely Route a Video, admin, API (views.py veřejné, manage.py správa),
-                         formuláře, Dramatiq úloha (tasks.py), příkaz process_video
+  routes/                modely Route, Video a Ride, admin, API (views.py veřejné, manage.py správa,
+                         rides.py jízdy), formuláře, Dramatiq úloha (tasks.py),
+                         příkazy process_video a requeue_stuck (při startu workeru)
 pipeline/                zpracování videa, nezávislé na Djangu
   download.py            yt-dlp (≤ 720p, přednostně H.264)
   vo.py, flow_speed.py   vizuální odometrie, rychlost z pohybu silnice
@@ -139,7 +166,9 @@ pipeline/                zpracování videa, nezávislé na Djangu
   video_grade.py         sklon z obrazu (GeoCalib + SfM)
   process.py             spojení kroků pro jednotlivé zdroje
   progress.py            hlášení průběhu do úlohy
-frontend/                Vue aplikace (seznam tras, trenažér, kontrola, správa)
+frontend/                Vue aplikace: seznam tras, jízda (RideView + useRideSession), kontrola,
+                         správa, trenažér, odjeté jízdy
+firmware/                most ESP32 ↔ Kettler (PlatformIO)
 docker/                  Dockerfile (targety web, worker), entrypoint
 tests/                   pytest
 research/                výzkumné skripty z prototypu (v produkci se nespouštějí)
@@ -170,10 +199,12 @@ Data v `./.data/`: `postgres/` (databáze), `media/` (GPX), `cache/` (mezivýsle
 
 - **Zdroj „obraz“ nepoběží na ARM** (Apple Silicon, linux/aarch64): pycolmap nemá wheel pro linux/aarch64. Potřebuje amd64 worker.
 - **Napárování přes GPX nezvládá střihy ve videu** (vystřižené úseky). U videí s overlayem je spolehlivější zdroj „overlay“.
-- **Overlay**: jen metrické jednotky (km/h, km, m, %); výška se bere z výškoměru, jinak z integrovaného sklonu v celých procentech.
-- **Fronta Dramatiq je jen v Redisu bez trvalých dat**: po `docker compose down` se ztratí a rozběhnutá nebo čekající videa zůstanou ve stavu „ve frontě“ / „zpracovává se“. Je potřeba je odeslat znovu.
+- **Overlay**: jen metrické jednotky (km/h, km, m, %); výška se bere z výškoměru, jinak z integrovaného sklonu. Rozložení overlaye: hodnoty s jednotkami a hodnoty pod popisky; nový typ overlaye je nová třída v `pipeline/overlay.py`. Tenké obrysové písmo na světlém pozadí se čte špatně; takové video zpracování odmítne.
+- **Fronta Dramatiq je jen v Redisu bez trvalých dat**: worker při startu znovu odešle videa, která zůstala ve stavu „ve frontě“ / „zpracovává se“. Video, které visí bez běžícího workeru, jde ukončit a pustit znovu z dashboardu nebo adminu.
+- **YouTube může stahování blokovat** („Sign in to confirm you're not a bot“, HTTP 403), typicky po sérii stažení. Zpracování pak selže už při stahování; pomůže počkat, nebo dát yt-dlp cookies přihlášeného prohlížeče (zatím není v konfiguraci).
+- **Postgres v bind mountu na macOS (Colima)**: po uspání Macu může zápis na sdílený disk selhat („could not fsync … Permission denied“) a Postgres se restartuje. Data se obnoví z WAL, ale rozběhnuté zpracování skončí chybou. Během dlouhého zpracování nenech Mac usnout.
 - Časový limit zpracování závisí na délce videa (GPX 2×, overlay 1,5×, obraz 8× délka videa, minimálně 1 h).
-- Trenažér zatím není napojený na hardware.
+- Most trenažéru: jen Kettler s Bluetooth Classic (ověřeno na RACER RS); API mostu je bez autentizace, určené pro domácí síť.
 
 ## Právní poznámky
 

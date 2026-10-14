@@ -46,6 +46,8 @@ services:
       - ./backend:/app/backend
       - ./pipeline:/app/pipeline
       - ./.data/media:/data/media
+      # the build from frontend-build instead of the one baked into the image
+      - ./frontend/dist:/app/frontend/dist
     ports:
       - "8000:8000"
     depends_on:
@@ -59,6 +61,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: worker
+    command: ["sh", "-c", "python manage.py requeue_stuck && exec python manage.py rundramatiq --processes 1 --threads 1"]
     environment: *django-env
     volumes:
       - ./backend:/app/backend
@@ -77,6 +80,8 @@ services:
     command: ["sh", "-c", "bun install --frozen-lockfile && exec bun run dev --host 0.0.0.0 --port 5173"]
     environment:
       VITE_API_PROXY: http://web:8000
+      # bind mounts from macOS deliver no file change events into the container
+      VITE_WATCH_POLL: "1"
     volumes:
       - ./frontend:/app
       # Linux node_modules (native esbuild/rollup binaries) must not mix with the host's
@@ -85,3 +90,13 @@ services:
       - "5173:5173"
     depends_on:
       - web
+
+  frontend-build:
+    image: oven/bun:1.4.3
+    working_dir: /app
+    command: ["sh", "scripts/build-watch.sh"]
+    volumes:
+      - ./frontend:/app
+      - ./.data/frontend-node_modules:/app/node_modules
+    depends_on:
+      - frontend

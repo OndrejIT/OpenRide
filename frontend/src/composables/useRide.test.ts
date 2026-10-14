@@ -48,6 +48,8 @@ describe('useRide – virtual', () => {
     expect(r.dist.value).toBe(100)
     expect(r.grade.value).toBe(5)
     expect(r.ahead.value!.grade).toBeCloseTo(5)
+    expect(r.trainer.value).toEqual({ sim: 5, level: 5 }) // full grade by default
+    r.setDifficulty(0.5)
     expect(r.trainer.value).toEqual({ sim: 2.5, level: 3 })
     r.setDifficulty(1.3)
     expect(r.difficulty.value).toBe(1)
@@ -75,5 +77,7 @@ describe('useRide – video', () => {
     r.playing.value = true
     r.advance(5)
     expect(r.dist.value).toBeCloseTo(500)
+    expect(r.step(1, 6)).toBeCloseTo(110) // a longer jump: 6 × 10 s
+    expect(r.step(-1, 12)).toBeCloseTo(0) // clamped to the start
   })
 })

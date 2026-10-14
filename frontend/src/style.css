@@ -17,8 +17,12 @@
   --accent: #eb6834;
   --cursor: #0b0b0b;
   --shade: rgba(11, 11, 11, 0.08);
+  --good: #2f855a;
+  --warn: #b7791f;
+  --bad: #c53030;
 }
 
+/* Theme: system (auto) unless the rider picked one in the settings menu (data-theme on <html>). */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
@@ -38,10 +42,12 @@
     --accent: #d95926;
     --cursor: #f0efec;
     --shade: rgba(240, 239, 236, 0.12);
+    --good: #48bb78;
+    --warn: #d69e2e;
+    --bad: #f56565;
   }
 }
 
-/* Trainer HUD sits on video / 3D scene, so it is dark regardless of the system theme. */
 :root[data-theme='dark'],
 .theme-dark {
   color-scheme: dark;
@@ -50,7 +56,7 @@
   --surface-2: #242422;
   --panel: rgba(16, 16, 15, 0.72);
   --panel-solid: #1a1a19;
-  --line: #3a3a37;
+  --line: #33332f;
   --grid: #33332f;
   --text: #f0efec;
   --text-2: #c3c2b7;
@@ -60,6 +66,15 @@
   --flat: #6b6a65;
   --accent: #d95926;
   --cursor: #f0efec;
+  --shade: rgba(240, 239, 236, 0.12);
+  --good: #48bb78;
+  --warn: #d69e2e;
+  --bad: #f56565;
+}
+
+/* Trainer HUD sits on video / 3D scene, so it is dark regardless of the theme. */
+.theme-dark {
+  --line: #3a3a37;
   --shade: rgba(0, 0, 0, 0.45);
 }
 
@@ -70,6 +85,13 @@
 html,
 body {
   margin: 0;
+}
+/* a home screen web app draws under the iPad status bar (0 in a normal browser tab) */
+body {
+  padding-top: env(safe-area-inset-top);
+}
+html,
+body {
   background: var(--bg);
   color: var(--text);
   font:

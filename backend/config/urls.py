@@ -3,11 +3,13 @@ from django.urls import include, path, re_path
 from rest_framework.routers import SimpleRouter
 
 from routes.manage import ManageVideoViewSet, session
+from routes.rides import RideViewSet
 from routes.views import RouteViewSet, spa_index
 
 router = SimpleRouter()
 router.register("routes", RouteViewSet, basename="route")
 router.register("manage/videos", ManageVideoViewSet, basename="manage-video")
+router.register("rides", RideViewSet, basename="ride")
 
 urlpatterns = [
     path("admin/", admin.site.urls),

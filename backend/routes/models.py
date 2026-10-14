@@ -50,6 +50,8 @@ class Video(models.Model):
     # {"step": label, "pct": 0-100 within the step, "since": unix time the step started} while processing
     progress = models.JSONField("průběh", null=True, blank=True, editable=False)
     started_at = models.DateTimeField("začátek zpracování", null=True, blank=True, editable=False)
+    # id of the last sent task; a message from an earlier send (requeued after a worker restart) is skipped
+    task_token = models.CharField(max_length=32, blank=True, editable=False)
     finished_at = models.DateTimeField("konec zpracování", null=True, blank=True, editable=False)
     # {"t": [s], "dist": [m]} per video second: video time -> distance along Route.profile
     timing = models.JSONField("časování", null=True, blank=True, editable=False)
@@ -67,3 +69,33 @@ class Video(models.Model):
         route = getattr(self, "route", None)
         if self.grade_source == self.GradeSource.GPX and route is not None and not route.gpx:
             raise ValidationError({"grade_source": "Výpočet z GPX vyžaduje GPX u trasy."})
+
+
+class Ride(models.Model):
+    """A ride on the trainer, saved by the rider once finished: per-second samples and their summary."""
+
+    route = models.ForeignKey(
+        Route, on_delete=models.SET_NULL, null=True, blank=True, related_name="rides", verbose_name="trasa"
+    )
+    title = models.CharField("trasa (název při jízdě)", max_length=200)
+    started_at = models.DateTimeField("začátek")
+    created_at = models.DateTimeField("uloženo", auto_now_add=True)
+    duration_s = models.IntegerField("doba jízdy [s]")
+    distance_m = models.FloatField("vzdálenost [m]")
+    elev_gain_m = models.FloatField("stoupání [m]")
+    avg_power = models.FloatField("průměrný výkon [W]", null=True, blank=True)
+    max_power = models.FloatField("max. výkon [W]", null=True, blank=True)
+    avg_rpm = models.FloatField("průměrná kadence", null=True, blank=True)
+    avg_pulse = models.FloatField("průměrný tep", null=True, blank=True)
+    max_pulse = models.FloatField("max. tep", null=True, blank=True)
+    # {"t": [s], "dist": [m], "elev": [m], "grade": [%], "sim": [%], "brake": [], "power": [W], "rpm": [], "pulse": []}
+    # one sample per ridden second; trainer values are null while the trainer is not connected
+    samples = models.JSONField("záznam")
+
+    class Meta:
+        verbose_name = "jízda"
+        verbose_name_plural = "jízdy"
+        ordering = ["-started_at"]
+
+    def __str__(self):
+        return f"{self.title} {self.started_at:%Y-%m-%d %H:%M}"

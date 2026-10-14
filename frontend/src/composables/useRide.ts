@@ -22,7 +22,8 @@ export function useRide(route: Ref<RouteDetail | null>) {
   const videoTime = ref(0)
   const elapsed = ref(0)
   const playing = ref(false)
-  const difficulty = ref(0.5)
+  // full grade by default: matches the brake mapping tuned on the Kettler (NaKole)
+  const difficulty = ref(1)
   const speedKmh = ref(25)
 
   const profile = computed(() => route.value?.profile ?? null)
@@ -68,14 +69,14 @@ export function useRide(route: Ref<RouteDetail | null>) {
     return null
   }
 
-  /** ←/→: ±10 s of video, or ±100 m without video. */
-  function step(direction: 1 | -1): number | null {
+  /** ←/→: ±10 s of video (or ±100 m without video) times `times`. */
+  function step(direction: 1 | -1, times = 1): number | null {
     if (timing.value) {
       const last = timing.value.t[timing.value.t.length - 1] ?? 0
-      setVideoTime(Math.min(last, Math.max(0, videoTime.value + direction * SEEK_S)))
+      setVideoTime(Math.min(last, Math.max(0, videoTime.value + direction * SEEK_S * times)))
       return videoTime.value
     }
-    return seekDist(dist.value + direction * SEEK_M)
+    return seekDist(dist.value + direction * SEEK_M * times)
   }
 
   function setDifficulty(v: number) {

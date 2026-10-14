@@ -1,4 +1,5 @@
-"""Management API for the dashboard: videos with their processing state, adding them, sending them to processing.
+"""Management API for the dashboard: videos with their processing state, adding them, sending them to processing
+and stopping it.
 
 Staff only, through the Django session (log in at /admin/login/); the forms are the admin's, so validation is shared.
 """
@@ -76,6 +77,13 @@ class ManageVideoViewSet(viewsets.ViewSet):
         if video.status in tasks.ACTIVE:
             return Response({"detail": "Video už je ve frontě nebo se zpracovává."}, status=status.HTTP_409_CONFLICT)
         tasks.enqueue(video)
+        return Response(video_json(videos().get(pk=video.pk)))
+
+    @action(detail=True, methods=["post"])
+    def stop(self, request, pk=None):
+        video = get_object_or_404(videos(), pk=pk)
+        if not tasks.cancel(video):
+            return Response({"detail": "Video nečeká ve frontě ani se nezpracovává."}, status=status.HTTP_409_CONFLICT)
         return Response(video_json(videos().get(pk=video.pk)))
 
 

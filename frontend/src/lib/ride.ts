@@ -69,14 +69,6 @@ export function aheadGrade(p: Profile, d: number, span = AHEAD_M): { meters: num
   return { meters: d1 - d0, grade: ((elevAt(p, d1) - elevAt(p, d0)) / (d1 - d0)) * 100 }
 }
 
-/** Elevations every `stepM` over the next `span` metres (stops at the finish). */
-export function aheadElevations(p: Profile, d: number, span = AHEAD_M, stepM = 25): number[] {
-  const end = routeLength(p)
-  const out: number[] = []
-  for (let x = d; x <= d + span + 1e-6 && x <= end + 1e-6; x += stepM) out.push(elevAt(p, Math.min(x, end)))
-  return out
-}
-
 /**
  * Simulated grade sent to a smart trainer (Zwift-like trainer difficulty): grade × difficulty,
  * descents softened by half more and never below −5 %; level 0–10 for the HUD bars.

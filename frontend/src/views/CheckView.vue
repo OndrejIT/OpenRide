@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { fetchRoute } from '@/api'
 import RouteMap from '@/components/RouteMap.vue'
+import SettingsMenu from '@/components/SettingsMenu.vue'
 import TimeChart from '@/components/TimeChart.vue'
 import YoutubePlayer from '@/components/YoutubePlayer.vue'
 import { gradeColor, tokenReader } from '@/lib/draw'
@@ -98,7 +99,10 @@ onBeforeUnmount(() => cancelAnimationFrame(raf))
 
 <template>
   <main ref="root" class="check">
-    <p class="nav"><RouterLink :to="{ name: 'routes' }">← trasy</RouterLink></p>
+    <div class="nav">
+      <RouterLink :to="{ name: 'routes' }">← trasy</RouterLink>
+      <SettingsMenu />
+    </div>
     <p v-if="error" class="msg">Trasu se nepodařilo načíst: {{ error }}</p>
     <p v-else-if="!data" class="msg">Načítám…</p>
     <p v-else-if="!video || !series" class="msg">
@@ -186,6 +190,9 @@ onBeforeUnmount(() => cancelAnimationFrame(raf))
   padding: 16px;
 }
 .nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin: 0 0 8px;
   font-size: 13px;
 }

@@ -25,7 +25,10 @@ stažení (yt-dlp, ≤ 720p, přednostně H.264)
 - **Stav videa**: `new` → `queued` (odesláno) → `processing` → `ready` / `failed`. Video ve frontě nebo při zpracování nejde odeslat znovu.
 - **Průběh**: kroky pipeline volají `progress.report(krok, hotovo, celkem)`; úloha zapisuje krok a procenta do `Video.progress` nejvýš jednou za 5 s. Admin i dashboard z toho počítají odhad zbývajícího času.
 - **Časový limit**: po stažení se zjistí délka videa; limit = GPX 2×, overlay 1,5×, obraz 8× délka videa, minimálně 1 h. Překročení ukončí úlohu při nejbližším hlášení průběhu. Dramatiq `time_limit` 24 h je jen pojistka.
-- **Chyba** se uloží do `Video.error` i s krokem, ve kterém nastala („stahování videa: …“).
+- **Chyba** se uloží do `Video.error` i s krokem, ve kterém nastala („stahování videa: …“). Když mezitím spadlo spojení na databázi (restart Postgresu), úloha si otevře nové, aby video nezůstalo viset jako „zpracovává se“.
+- **Token úlohy**: každé odeslání dostane nový `Video.task_token`. Starší zpráva (znovu doručená po restartu workeru) se podle něj přeskočí a neběží dvakrát.
+- **Ukončení**: admin („Ukončit zpracování“, „Ukončit a zpracovat znovu“) a dashboard („Ukončit“) změní token a nastaví stav `failed` / „ukončeno ručně“. Běžící úloha to pozná při nejbližším hlášení průběhu a skončí, worker je hned volný.
+- **Restart workeru**: při startu `requeue_stuck` znovu odešle videa ve stavu `queued` / `processing` (jejich zprávy se ztratily s restartem nebo vyprázdněným Redisem).
 - **Cache**: `CACHE_DIR/videos/<YouTube ID zpracovávaného videa>/` drží mezivýsledky (VO, rychlost, OCR, signály synchronizace). Opakované zpracování je proto rychlé. Stažená videa se po zpracování mažou.
 - **Kodek**: wheel OpenCV pro linux/aarch64 neumí dekódovat AV1, které YouTube často posílá; stahuje se proto přednostně H.264 (`avc1`).
 - **Worker** zpracovává jedno video naráz (jeden proces, jedno vlákno); úlohy vytěžují CPU.
@@ -34,23 +37,22 @@ stažení (yt-dlp, ≤ 720p, přednostně H.264)
 
 Pro videa s vypáleným overlayem cyklopočítače (Garmin apod.).
 
-1. **OCR**: RapidOCR (ONNX, modely jsou součástí balíčku) čte celý snímek jednou za sekundu. Na 720p trvá ~0,3 s na snímek; 40min video ~14 min.
-2. **Rozpoznání údajů podle jednotek**, bez konfigurace rozvržení pro každý kanál:
+1. **OCR**: RapidOCR (ONNX, modely jsou součástí balíčku), jeden snímek za sekundu. Prvních 30 snímků s overlayem se čte celých (kalibrace); pak už jen výřezy kolem nalezených údajů, 2× zvětšené (drobné písmo se čte lépe a pár malých výřezů je rychlejší než celý snímek). Celý snímek se čte dál každých 10 s, aby se chytil posunutý nebo nově objevený údaj. Na 720p ~0,4 s na sekundu videa. Surové texty a jejich polohy se ukládají do cache (`overlay_ocr.json`), takže změna rozpoznávání nepotřebuje nové OCR.
+2. **Rozložení overlaye**: overlaye se liší podle výrobce i autora videa, proto je rozpoznávání rozdělené do tříd (`Layout`). Po kalibraci se vybere ta, která na kalibračních snímcích přečte nejvíc různých údajů (jiná než výchozí musí být lepší aspoň o 10 %), a pak se použije na celé video. Vybrané rozložení je v metrikách kvality.
 
-   | Text | Údaj |
-   |---|---|
-   | `12.5 km`, `2.5km` | vzdálenost (počítadlo) |
-   | `18 km/h`, nebo číslo s popiskem `km/h` vedle / pod ním | rychlost |
-   | `1668.2 m`, `Höhe1668.2m` | nadmořská výška |
-   | `3%`, `-4%` | sklon |
+   | Rozložení | Overlay | Příklad |
+   |---|---|---|
+   | `units` (hodnoty s jednotkami) | číslo s jednotkou za ním nebo pod ním | `12.5 km`, `18 km/h`, `1668.2 m`, `-4%`, `Höhe1668.2m` |
+   | `labels` (hodnoty pod popisky) | číslo pod popiskem, jednotka vlevo pod ním nebo chybí | `ELEVATION / 2929 / M`, `SLOPE / -5` |
 
-   Hodnoty mimo rozumné meze se zahodí (rychlost 0–120 km/h, výška −450 až 6000 m, sklon ±35 %).
-3. **Poloha údaje**: pro každý údaj se najde místo ve snímku, kde se čte nejčastěji (hustota přes vzorek až 2000 čtení, poloměr 6 % výšky snímku). Čtení jinde (jiné widgety, náhodné shody) se ignorují.
+   Slité texty (`4 rpm 23 km/h2.6 km`) se dělí podle jednotek. Hodnoty mimo rozumné meze se zahodí (rychlost 0–120 km/h, výška −450 až 6000 m, sklon ±35 %).
+3. **Poloha údaje**: pro každý údaj se najde místo ve snímku, kde se čte nejčastěji (poloměr 6 % výšky snímku). Čtení jinde (jiné widgety, náhodné shody) se ignorují. U vzdálenosti se bere nejčastější místo, kde hodnota **roste** (konec videa proti začátku), takže stojící „0.0 km“ okruhu nebo celková délka trasy nevyhrají nad počítadlem. Když neroste nic, vzdálenost z overlaye se nepoužije.
 4. **Čištění**: odchylka od klouzavého mediánu přes 15 s nad tolerancí (rychlost 8 km/h, km 0,3, výška 5 m, sklon 4 %) = chybně přečtená číslice. Chyby chodí ve shlucích (odlesk za číslicemi), proto široké okno.
 5. **Vzdálenost**: integrál rychlosti kalibrovaný na počítadlo km (samotné počítadlo má krok 0,1 km). Robustní fit jednoho měřítka a posunu pro každý úsek, pomalá korekce driftu (Gauss, σ 60 s) jen uvnitř úseků.
-6. **Střihy**: když počítadlo mezi dvěma čteními skočí o víc než 150 m nad to, co vysvětlí rychlost, video bylo stříhané. Vzdálenost na tom snímku skočí také, takže profil pokračuje podle skutečné trasy a mezi oběma stranami střihu se výška lineárně interpoluje. Vzdálenost i výška se počítají v časech OCR snímků, aby skok výšky a vzdálenosti padl na stejný okamžik.
+6. **Střihy**: když počítadlo mezi dvěma čteními skočí o víc než 150 m nad to, co vysvětlí rychlost, video bylo stříhané. Počítá se z průběžného maxima počítadla, takže jednorázově špatně přečtená nižší hodnota falešný střih nevytvoří. Vzdálenost na tom snímku skočí také, takže profil pokračuje podle skutečné trasy a mezi oběma stranami střihu se výška lineárně interpoluje. Vzdálenost i výška se počítají v časech OCR snímků, aby skok výšky a vzdálenosti padl na stejný okamžik.
 7. **Profil**: výška podle vzdálenosti; když výškoměr chybí (méně než 30 % čtení), výška se integruje ze sklonu (celá procenta, hrubší profil).
 8. **Časování** vzniká přímo, bez napárování: sekunda videa → vzdálenost.
+9. **Pojistka**: když se rychlost přečte v méně než polovině snímků a počítadlo km v méně než 30 %, zpracování skončí chybou „z overlaye se nepodařilo spolehlivě přečíst rychlost ani vzdálenost“ místo nesmyslně krátké trasy (typicky tenké obrysové písmo na světlém pozadí). Takové video je lepší zpracovat ze zdroje GPX.
 
 Kontrola kvality: shoda profilu se sklonem z overlaye (korelace, průměrná odchylka), měřítko a odchylka vůči počítadlu, pokrytí čtením.
 

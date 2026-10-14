@@ -65,6 +65,9 @@ def test_add_and_process(staff, send):
     assert listed["verdict"] == "bad" and listed["quality"][1]["verdict"] == "bad"
     r = post(staff, f"{URL}{v['id']}/process/")
     assert r.status_code == 200 and r.json()["status"] == "queued" and send.call_count == 2
+    r = post(staff, f"{URL}{v['id']}/stop/")
+    assert r.status_code == 200 and r.json()["status"] == "failed" and r.json()["error"] == "ukončeno ručně"
+    assert post(staff, f"{URL}{v['id']}/stop/").status_code == 409  # nothing to stop
 
 
 def test_add_with_gpx_without_processing(staff, send, climb_gpx):

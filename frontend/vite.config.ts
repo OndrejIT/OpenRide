@@ -35,6 +35,7 @@ export default defineConfig(({ mode }) => {
     plugins: [vue(), mock ? mockApi() : null],
     resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
     server: {
+      watch: env.VITE_WATCH_POLL === '1' ? { usePolling: true, interval: 300 } : undefined,
       proxy: mock
         ? undefined
         : Object.fromEntries(

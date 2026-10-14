@@ -102,6 +102,7 @@ def _pct(x: float) -> str:
 
 METHODS = {"dp": "napárování GPX na video", "overlay": "overlay cyklopočítače (OCR)", "video": "sklon z obrazu"}
 COVERAGE_LABELS = {"speed": "rychlost", "dist": "km", "elev": "výška", "grade": "sklon"}
+LAYOUT_LABELS = {"units": "hodnoty s jednotkami", "labels": "hodnoty pod popisky"}
 
 
 def quality_rows(q: dict) -> list[tuple[str, str, str | None]]:
@@ -118,9 +119,10 @@ def quality_rows(q: dict) -> list[tuple[str, str, str | None]]:
         rows.append(("průměrná rychlost", f"{v:.1f} km/h", None))
     if (cov := q.pop("coverage", None)) is not None:
         text = ", ".join(f"{COVERAGE_LABELS.get(k, k)} {_pct(v)}" for k, v in cov.items())
-        # only what the profile is computed from; the overlay grade is just a cross-check when elevation is read
-        used = ["speed", "dist", "grade" if q.get("elev_source") == "grade" else "elev"]
-        worst = min((cov[k] for k in used if k in cov), default=min(cov.values()))
+        # only what the profile is computed from; the overlay grade is just a cross-check when elevation is read,
+        # the odometer only calibrates the speed integral (either of the two carries the distance)
+        height = cov.get("grade" if q.get("elev_source") == "grade" else "elev", 1.0)
+        worst = min(max(cov.get("speed", 0.0), cov.get("dist", 0.0)), height)
         rows.append(("přečteno z overlaye", text, _verdict(worst, 0.9, 0.7)))
     if (v := q.pop("dist_scale", None)) is not None:
         rows.append(("měřítko rychlost × počítadlo km", f"{v:.3f}", _verdict(abs(1 - v), 0.05, 0.15, False)))
@@ -128,6 +130,8 @@ def quality_rows(q: dict) -> list[tuple[str, str, str | None]]:
         rows.append(("odchylka od počítadla km", f"{v:.0f} m", _verdict(v, 50, 150, False)))
     if (cuts := q.pop("cuts_s", None)) is not None:
         rows.append(("střihy ve videu (čas)", ", ".join(f"{c // 60}:{c % 60:02d}" for c in cuts) or "žádné", None))
+    if (v := q.pop("layout", None)) is not None:
+        rows.append(("rozložení overlaye", LAYOUT_LABELS.get(v, v), None))
     if (v := q.pop("elev_source", None)) is not None:
         rows.append(("výška z", {"elev": "výškoměru v overlayi", "grade": "integrovaného sklonu"}.get(v, v), None))
     if (v := q.pop("grade_corr", None)) is not None:

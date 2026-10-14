@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Profile, Timing } from '@/types/api'
 import {
-  aheadElevations,
   aheadGrade,
   bearing,
   distToTime,
@@ -60,12 +59,6 @@ describe('aheadGrade', () => {
   it('shortens near the finish and stops in the last 50 m', () => {
     expect(aheadGrade(profile, 800)!.meters).toBe(200)
     expect(aheadGrade(profile, 960)).toBeNull()
-  })
-  it('samples 25 m columns', () => {
-    const e = aheadElevations(profile, 0)
-    expect(e).toHaveLength(21)
-    expect(e[20]).toBeCloseTo(100)
-    expect(aheadElevations(profile, 900)).toHaveLength(5)
   })
 })
 

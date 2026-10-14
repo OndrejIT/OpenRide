@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { addVideo, fetchManagedVideos, fetchSession, FormError, processVideo } from '@/api'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import SettingsMenu from '@/components/SettingsMenu.vue'
+import { addVideo, fetchManagedVideos, fetchSession, FormError, processVideo, stopVideo } from '@/api'
 import type { FormErrors, ManagedVideo, Session, Verdict } from '@/types/manage'
 
 // fast while the worker reports progress, slow otherwise (new videos from the admin still show up)
@@ -14,6 +15,15 @@ const SOURCE_HINT: Record<string, string> = {
   video: 'nic z toho; nepřesné, na ARM workeru nepoběží',
 }
 const LOGIN_URL = '/admin/login/?next=/manage'
+// list filter by processing state; waiting includes the running one (it has no result yet)
+const FILTERS = [
+  { key: 'all', label: 'Vše', statuses: null },
+  { key: 'waiting', label: 'Čeká na zpracování', statuses: ['new', 'queued', 'processing'] },
+  { key: 'failed', label: 'Selhalo', statuses: ['failed'] },
+  { key: 'ready', label: 'Hotové', statuses: ['ready'] },
+] as const
+type FilterKey = (typeof FILTERS)[number]['key']
+const FILTER_STORE = 'openride.manageFilter'
 
 const session = ref<Session | null>(null)
 const videos = ref<ManagedVideo[] | null>(null)
@@ -26,6 +36,42 @@ const gpxInput = ref<HTMLInputElement | null>(null)
 const errors = ref<FormErrors>({})
 const saving = ref(false)
 const added = ref<string | null>(null)
+
+function storedFilter(): FilterKey {
+  try {
+    const f = localStorage.getItem(FILTER_STORE)
+    return FILTERS.some((x) => x.key === f) ? (f as FilterKey) : 'all'
+  } catch {
+    return 'all'
+  }
+}
+const filter = ref<FilterKey>(storedFilter())
+watch(filter, (f) => {
+  try {
+    localStorage.setItem(FILTER_STORE, f)
+  } catch {
+    // blocked storage: the list starts with everything next time
+  }
+})
+const inFilter = (v: ManagedVideo, key: FilterKey) => {
+  const statuses: readonly string[] | null = FILTERS.find((x) => x.key === key)!.statuses
+  return !statuses || statuses.includes(v.status)
+}
+const counts = computed(() =>
+  Object.fromEntries(
+    FILTERS.map((f) => [f.key, videos.value?.filter((v) => inFilter(v, f.key)).length ?? 0]),
+  ),
+)
+const shown = computed(() => videos.value?.filter((v) => inFilter(v, filter.value)) ?? [])
+// what the worker is on right now goes first, in its own group; the rest keeps the list order
+const groups = computed(() => {
+  const running = shown.value.filter((v) => v.status === 'processing')
+  const rest = shown.value.filter((v) => v.status !== 'processing')
+  return [
+    { key: 'running', title: 'Právě se zpracovává', items: running },
+    { key: 'rest', title: null, items: rest },
+  ].filter((g) => g.items.length)
+})
 
 const anyActive = computed(() => videos.value?.some((v) => ACTIVE.includes(v.status)) ?? false)
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -81,11 +127,12 @@ async function submit() {
   }
 }
 
-async function process(v: ManagedVideo) {
+// stop = also the way out when a video is stuck as processing (crashed worker or database)
+async function act(v: ManagedVideo, call: (id: number) => Promise<ManagedVideo>) {
   busy[v.id] = true
   actionError.value = null
   try {
-    await processVideo(v.id)
+    await call(v.id)
     await refresh()
   } catch (e) {
     actionError.value = `${v.title}: ${(e as Error).message}`
@@ -103,8 +150,10 @@ const pct = (v: ManagedVideo) => Math.round(v.progress?.pct ?? 0)
       <h1>Správa videí</h1>
       <nav>
         <RouterLink :to="{ name: 'routes' }">trasy</RouterLink>
+        <RouterLink :to="{ name: 'trainer' }">trenažér</RouterLink>
         <a href="/admin/">admin</a>
         <span v-if="session?.user" class="who">{{ session.user }}</span>
+        <SettingsMenu />
       </nav>
     </header>
 
@@ -183,60 +232,87 @@ const pct = (v: ManagedVideo) => Math.round(v.progress?.pct ?? 0)
         <p v-if="actionError" class="msg err">{{ actionError }}</p>
         <p v-if="!videos" class="msg">Načítám…</p>
         <p v-else-if="!videos.length" class="msg">Zatím žádná videa.</p>
-        <ul v-else class="videos">
-          <li v-for="v in videos" :key="v.id" class="video card" :class="v.status">
-            <img :src="`https://i.ytimg.com/vi/${v.source_id}/mqdefault.jpg`" alt="" loading="lazy" />
-            <div class="info">
-              <div class="title">{{ v.title }}</div>
-              <div class="chips">
-                <span>{{ v.grade_source_label }}</span>
-                <span v-if="v.has_gpx">GPX</span>
-                <span v-if="v.data_source_id">2 verze videa</span>
-              </div>
-              <div class="state">
-                <span class="status">{{ v.status_label }}</span>
-                <span v-if="v.status !== 'new'" class="detail">{{ v.state }}</span>
-                <span v-if="v.verdict && v.status === 'ready'" class="verdict" :class="v.verdict">
-                  {{ VERDICT_LABEL[v.verdict] }}
-                </span>
-              </div>
-              <div
-                v-if="v.status === 'processing' && v.progress"
-                class="bar"
-                role="progressbar"
-                :aria-valuenow="pct(v)"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                :aria-label="v.progress.step"
-              >
-                <div :style="{ width: `${pct(v)}%` }"></div>
-              </div>
-              <p v-if="v.status === 'failed' && v.error" class="err">{{ v.error }}</p>
-              <details v-if="v.quality.length">
-                <summary>kvalita výsledku</summary>
-                <table>
-                  <tr v-for="q in v.quality" :key="q.label">
-                    <td>{{ q.label }}</td>
-                    <td>{{ q.value }}</td>
-                    <td :class="['verdict', q.verdict]">{{ q.verdict ? VERDICT_LABEL[q.verdict] : '' }}</td>
-                  </tr>
-                </table>
-              </details>
-            </div>
-            <div class="actions">
-              <button type="button" :disabled="busy[v.id] || ACTIVE.includes(v.status)" @click="process(v)">
-                {{ v.status === 'new' ? 'Zpracovat' : 'Zpracovat znovu' }}
-              </button>
-              <RouterLink v-if="v.status === 'ready'" :to="{ name: 'ride', params: { id: v.route_id } }"
-                >trenažér</RouterLink
-              >
-              <RouterLink v-if="v.status === 'ready'" :to="{ name: 'check', params: { id: v.route_id } }"
-                >kontrola</RouterLink
-              >
-              <a :href="v.admin_url">v adminu</a>
-            </div>
-          </li>
-        </ul>
+        <template v-else>
+          <div class="filter" role="group" aria-label="Stav zpracování">
+            <button
+              v-for="f in FILTERS"
+              :key="f.key"
+              type="button"
+              :aria-pressed="filter === f.key"
+              @click="filter = f.key"
+            >
+              {{ f.label }} <span class="num">{{ counts[f.key] }}</span>
+            </button>
+          </div>
+          <p v-if="!shown.length" class="msg">Žádné video v tomto stavu.</p>
+          <section v-for="g in groups" v-else :key="g.key" class="group" :class="g.key">
+            <h3 v-if="g.title">{{ g.title }}</h3>
+            <ul class="videos">
+              <li v-for="v in g.items" :key="v.id" class="video card" :class="v.status">
+                <img :src="`https://i.ytimg.com/vi/${v.source_id}/mqdefault.jpg`" alt="" loading="lazy" />
+                <div class="info">
+                  <div class="title">{{ v.title }}</div>
+                  <div class="chips">
+                    <span>{{ v.grade_source_label }}</span>
+                    <span v-if="v.has_gpx">GPX</span>
+                    <span v-if="v.data_source_id">2 verze videa</span>
+                  </div>
+                  <div class="state">
+                    <span class="status">{{ v.status_label }}</span>
+                    <span v-if="v.status !== 'new'" class="detail">{{ v.state }}</span>
+                    <span v-if="v.verdict && v.status === 'ready'" class="verdict" :class="v.verdict">
+                      {{ VERDICT_LABEL[v.verdict] }}
+                    </span>
+                  </div>
+                  <div
+                    v-if="v.status === 'processing' && v.progress"
+                    class="bar"
+                    role="progressbar"
+                    :aria-valuenow="pct(v)"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-label="v.progress.step"
+                  >
+                    <div :style="{ width: `${pct(v)}%` }"></div>
+                  </div>
+                  <p v-if="v.status === 'failed' && v.error" class="err">{{ v.error }}</p>
+                  <details v-if="v.quality.length">
+                    <summary>kvalita výsledku</summary>
+                    <table>
+                      <tr v-for="q in v.quality" :key="q.label">
+                        <td>{{ q.label }}</td>
+                        <td>{{ q.value }}</td>
+                        <td :class="['verdict', q.verdict]">
+                          {{ q.verdict ? VERDICT_LABEL[q.verdict] : '' }}
+                        </td>
+                      </tr>
+                    </table>
+                  </details>
+                </div>
+                <div class="actions">
+                  <button
+                    v-if="ACTIVE.includes(v.status)"
+                    type="button"
+                    :disabled="busy[v.id]"
+                    @click="act(v, stopVideo)"
+                  >
+                    Ukončit
+                  </button>
+                  <button v-else type="button" :disabled="busy[v.id]" @click="act(v, processVideo)">
+                    {{ v.status === 'new' ? 'Zpracovat' : 'Zpracovat znovu' }}
+                  </button>
+                  <RouterLink v-if="v.status === 'ready'" :to="{ name: 'ride', params: { id: v.route_id } }"
+                    >trenažér</RouterLink
+                  >
+                  <RouterLink v-if="v.status === 'ready'" :to="{ name: 'check', params: { id: v.route_id } }"
+                    >kontrola</RouterLink
+                  >
+                  <a :href="v.admin_url">v adminu</a>
+                </div>
+              </li>
+            </ul>
+          </section>
+        </template>
       </section>
     </template>
   </main>
@@ -244,19 +320,9 @@ const pct = (v: ManagedVideo) => Math.round(v.progress?.pct ?? 0)
 
 <style scoped>
 .manage {
-  --good: #2f855a;
-  --warn: #b7791f;
-  --bad: #c53030;
   max-width: 980px;
   margin: 0 auto;
   padding: 16px;
-}
-@media (prefers-color-scheme: dark) {
-  .manage {
-    --good: #48bb78;
-    --warn: #d69e2e;
-    --bad: #f56565;
-  }
 }
 header {
   display: flex;
@@ -276,6 +342,7 @@ h2 {
 }
 nav {
   display: flex;
+  align-items: center;
   gap: 14px;
   font-size: 14px;
 }
@@ -386,6 +453,24 @@ button:disabled {
   cursor: default;
 }
 
+.group + .group {
+  margin-top: 20px;
+}
+.group h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.group.running h3 {
+  color: var(--accent);
+}
+/* the running video stands out: accent frame around its card */
+.group.running .video {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 .videos {
   list-style: none;
   margin: 0;
@@ -422,6 +507,31 @@ button:disabled {
   flex-wrap: wrap;
   gap: 6px;
   font-size: 12px;
+}
+.filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.filter button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.filter button span {
+  margin-left: 4px;
+  opacity: 0.7;
+}
+.filter button[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 .chips span {
   border: 1px solid var(--line);

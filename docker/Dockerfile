@@ -53,4 +53,5 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-default-groups --group pipeline --group video
 WORKDIR /app/backend
 # processing is CPU-bound and one video takes long: one at a time
-CMD ["python", "manage.py", "rundramatiq", "--processes", "1", "--threads", "1"]
+# videos stuck in queued / processing (restart, emptied Redis) are sent again first
+CMD ["sh", "-c", "python manage.py requeue_stuck && exec python manage.py rundramatiq --processes 1 --threads 1"]

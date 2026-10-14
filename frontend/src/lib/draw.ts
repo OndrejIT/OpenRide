@@ -36,3 +36,13 @@ export function gradeColor(token: (name: string) => string, g: number): string {
     0.35 + 0.65 * Math.min(Math.abs(g) / 10, 1),
   )
 }
+
+// trainer load from easy to hard: green, yellow, orange, red (the ride screen's chart and load tile)
+const LOAD_STOPS = ['#00d68f', '#feca57', '#ff9f43', '#ee5a24', '#d63031']
+
+/** Colour for a load 0 (easiest brake level) … 1 (hardest). */
+export function loadColor(t: number): string {
+  const x = Math.min(1, Math.max(0, t)) * (LOAD_STOPS.length - 1)
+  const i = Math.min(LOAD_STOPS.length - 2, Math.floor(x))
+  return mix(LOAD_STOPS[i]!, LOAD_STOPS[i + 1]!, x - i)
+}

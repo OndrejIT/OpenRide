@@ -1,5 +1,6 @@
 {% extends "admin/change_form.html" %}
 {% block extrahead %}{{ block.super }}{% if refresh_s %}<meta http-equiv="refresh" content="{{ refresh_s }}">{% endif %}{% endblock %}
 {% block submit_buttons_bottom %}{{ block.super }}{% if show_process %}
-<div class="submit-row"><input type="submit" name="_process" value="Uložit a zpracovat"></div>
+<div class="submit-row"><input type="submit" name="_process" value="Uložit a zpracovat">{% if show_stop %}
+<input type="submit" name="_stop" value="Ukončit zpracování">{% endif %}</div>
 {% endif %}{% endblock %}

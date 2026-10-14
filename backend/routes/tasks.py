@@ -1,11 +1,12 @@
 import logging
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 import dramatiq
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from routes import services
@@ -28,11 +29,15 @@ class ProcessingTimeout(Exception):
     pass
 
 
+class Cancelled(Exception):
+    """The video was stopped (or sent again) from the admin while this task was running."""
+
+
 class Progress:
     """report() callback: writes the current step to the video (throttled) and enforces the time limit."""
 
-    def __init__(self, video_id: int):
-        self.video_id = video_id
+    def __init__(self, video_id: int, token: str = ""):
+        self.video_id, self.token = video_id, token
         self.started = time.time()
         self.step, self.since, self.written = None, 0.0, 0.0
         self.deadline, self.limit_s = None, None
@@ -50,9 +55,12 @@ class Progress:
         elif now - self.written < PROGRESS_INTERVAL_S:
             return
         self.written = now
-        Video.objects.filter(pk=self.video_id).update(
-            progress={"step": step, "pct": round(pct, 1), "since": round(self.since)}
-        )
+        # a changed token = stopped from the admin: the task ends at its next report instead of running for hours
+        if not self.mine().update(progress={"step": step, "pct": round(pct, 1), "since": round(self.since)}):
+            raise Cancelled
+
+    def mine(self):
+        return Video.objects.filter(pk=self.video_id, task_token=self.token)
 
 
 def time_limit_s(video: Video, duration_s: float) -> float:
@@ -60,21 +68,29 @@ def time_limit_s(video: Video, duration_s: float) -> float:
 
 
 @dramatiq.actor(max_retries=0, time_limit=HARD_TIME_LIMIT_MS)
-def process_video(video_id: int) -> None:
+def process_video(video_id: int, token: str | None = None) -> None:
     from pipeline.progress import reporting
 
     video = Video.objects.select_related("route").get(pk=video_id)
-    progress = Progress(video_id)
+    # an older message (sent again after a worker restart, or from before tokens existed) must not run twice
+    if video.task_token and token != video.task_token:
+        log.info("video %s: skipping a superseded task", video_id)
+        return
+    progress = Progress(video_id, video.task_token)
     Video.objects.filter(pk=video_id).update(
         status=Video.Status.PROCESSING, error="", progress=None, started_at=timezone.now(), finished_at=None
     )
     try:
         with reporting(progress):
             run(video, progress)
+    except Cancelled:
+        log.info("video %s: stopped from the admin", video_id)
     except BaseException as e:  # TimeLimitExceeded is not an Exception; the video must not stay "processing"
         log.exception("video %s failed", video_id)
         message = "".join(traceback.format_exception_only(e)).strip()
-        Video.objects.filter(pk=video_id).update(
+        if connection.connection is not None and not connection.is_usable():
+            connection.close()  # dead after a database restart; the next query opens a new one, so the state is saved
+        progress.mine().update(
             status=Video.Status.FAILED,
             error=f"{progress.step}: {message}" if progress.step else message,
             progress=None,
@@ -85,13 +101,27 @@ def process_video(video_id: int) -> None:
 
 def enqueue(video: Video) -> None:
     previous = Video.objects.filter(pk=video.pk).values_list("status", flat=True).first()
+    token = uuid.uuid4().hex
     # before sending: a fast worker would otherwise set "processing" first and get overwritten
-    Video.objects.filter(pk=video.pk).update(status=Video.Status.QUEUED, error="", progress=None)
+    Video.objects.filter(pk=video.pk).update(status=Video.Status.QUEUED, error="", progress=None, task_token=token)
     try:
-        process_video.send(video.pk)
+        process_video.send(video.pk, token)
     except Exception:
         Video.objects.filter(pk=video.pk).update(status=previous)
         raise
+
+
+def cancel(video: Video) -> bool:
+    """Stop a queued or running video; the new token makes its task end at the next progress report."""
+    return bool(
+        Video.objects.filter(pk=video.pk, status__in=ACTIVE).update(
+            status=Video.Status.FAILED,
+            error="ukončeno ručně",
+            progress=None,
+            finished_at=timezone.now(),
+            task_token=uuid.uuid4().hex,
+        )
+    )
 
 
 def run(video: Video, progress: Progress) -> None:

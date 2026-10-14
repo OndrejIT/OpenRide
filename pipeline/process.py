@@ -8,6 +8,7 @@ import numpy as np
 
 from pipeline import align, gpx, vo
 from pipeline.flow_speed import ground_mask, ground_speed
+from pipeline.progress import report
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +103,10 @@ def process_overlay(video: Path, workdir: Path) -> dict:
 
     fps, n, _, _ = vo.video_info(str(video))
     data = overlay.cached_ocr(video, workdir)
-    profile, d, quality = overlay.ride(data["t"], overlay.select(data["frames"], data["height"]))
+    report("profil z overlaye")  # with the OCR cached the last step would still be the download
+    layout = overlay.layout_of(data)
+    profile, d, quality = overlay.ride(data["t"], overlay.select(overlay.frame_tokens(data, layout), data["height"]))
+    quality["layout"] = layout.name
     return {
         "duration_s": int(round(n / fps)),
         "profile": profile,

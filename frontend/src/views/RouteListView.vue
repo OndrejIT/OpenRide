@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { fetchRoute, fetchRoutes } from '@/api'
 import RouteMap from '@/components/RouteMap.vue'
+import SettingsMenu from '@/components/SettingsMenu.vue'
 import { fmtPct } from '@/lib/ride'
+import { climbPerKm, LENGTHS, matches, type RouteFilter, TERRAINS, terrainOf } from '@/lib/routeFilter'
 import type { LatLon, RouteSummary } from '@/types/api'
 
 const routes = ref<RouteSummary[] | null>(null)
@@ -11,6 +13,25 @@ const error = ref<string | null>(null)
 const segments = reactive<Record<number, LatLon[] | null>>({})
 
 const num = (v: number | null, digits = 0) => (v == null ? '–' : v.toFixed(digits).replace('.', ','))
+
+const FILTER_KEY = 'openride.routeFilter'
+function loadFilter(): RouteFilter {
+  try {
+    return { length: null, terrain: null, ...JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}') }
+  } catch {
+    return { length: null, terrain: null }
+  }
+}
+const filter = reactive<RouteFilter>(loadFilter())
+watch(filter, () => {
+  try {
+    localStorage.setItem(FILTER_KEY, JSON.stringify(filter))
+  } catch {
+    // blocked storage: the filter just resets on reload
+  }
+})
+const shown = computed(() => routes.value?.filter((r) => matches(r, filter)) ?? [])
+const terrainLabel = (r: RouteSummary) => TERRAINS.find((t) => t.key === terrainOf(r))?.label
 
 onMounted(async () => {
   document.title = 'OpenRide – trasy'
@@ -32,45 +53,82 @@ onMounted(async () => {
   <main class="list">
     <header>
       <h1>OpenRide</h1>
-      <RouterLink :to="{ name: 'manage' }" class="manage-link">správa videí</RouterLink>
+      <nav>
+        <SettingsMenu />
+      </nav>
     </header>
     <p v-if="error" class="msg">Trasy se nepodařilo načíst: {{ error }}</p>
     <p v-else-if="!routes" class="msg">Načítám…</p>
     <p v-else-if="!routes.length" class="msg">Zatím tu nejsou žádné zpracované trasy.</p>
-    <ul v-else class="tiles">
-      <li v-for="r in routes" :key="r.id" class="tile">
-        <RouterLink :to="{ name: 'ride', params: { id: r.id } }" class="thumb">
-          <img
-            v-if="r.video"
-            :src="`https://i.ytimg.com/vi/${r.video.source_id}/hqdefault.jpg`"
-            :alt="r.title"
-            loading="lazy"
-          />
-          <RouteMap v-else-if="segments[r.id]" :segment="segments[r.id]!" :interactive="false" />
-          <span class="badge">{{ r.video ? 'video' : 'virtuální' }}</span>
-        </RouterLink>
-        <div class="body">
-          <RouterLink :to="{ name: 'ride', params: { id: r.id } }" class="title">{{ r.title }}</RouterLink>
-          <div class="facts">
-            <span
-              ><b class="num">{{ num(r.distance_km, 1) }}</b> km</span
-            >
-            <span
-              >↗ <b class="num">{{ num(r.elev_gain_m) }}</b> m</span
-            >
-            <span
-              >↘ <b class="num">{{ num(r.elev_loss_m) }}</b> m</span
-            >
-            <span
-              >max <b class="num">{{ r.max_grade == null ? '–' : fmtPct(r.max_grade) }}</b></span
-            >
-          </div>
-          <RouterLink v-if="r.video" :to="{ name: 'check', params: { id: r.id } }" class="check">
-            kontrola napárování
-          </RouterLink>
+    <template v-else>
+      <div class="filters">
+        <div class="chips" role="group" aria-label="Délka jízdy">
+          <button type="button" :aria-pressed="!filter.length" @click="filter.length = null">Vše</button>
+          <button
+            v-for="l in LENGTHS"
+            :key="l.key"
+            type="button"
+            :aria-pressed="filter.length === l.key"
+            @click="filter.length = filter.length === l.key ? null : l.key"
+          >
+            {{ l.label }}
+          </button>
         </div>
-      </li>
-    </ul>
+        <div class="chips" role="group" aria-label="Terén">
+          <button type="button" :aria-pressed="!filter.terrain" @click="filter.terrain = null">Vše</button>
+          <button
+            v-for="t in TERRAINS"
+            :key="t.key"
+            type="button"
+            :aria-pressed="filter.terrain === t.key"
+            @click="filter.terrain = filter.terrain === t.key ? null : t.key"
+          >
+            {{ t.label }}
+          </button>
+        </div>
+      </div>
+      <p v-if="!shown.length" class="msg">Filtru neodpovídá žádná trasa.</p>
+      <ul v-else class="tiles">
+        <li v-for="r in shown" :key="r.id" class="tile">
+          <RouterLink :to="{ name: 'ride', params: { id: r.id } }" class="thumb">
+            <img
+              v-if="r.video"
+              :src="`https://i.ytimg.com/vi/${r.video.source_id}/hqdefault.jpg`"
+              :alt="r.title"
+              loading="lazy"
+            />
+            <RouteMap v-else-if="segments[r.id]" :segment="segments[r.id]!" :interactive="false" />
+            <span class="badge">{{ r.video ? 'video' : 'virtuální' }}</span>
+            <span v-if="r.video?.duration_s" class="badge duration num"
+              >{{ Math.round(r.video.duration_s / 60) }} min</span
+            >
+          </RouterLink>
+          <div class="body">
+            <RouterLink :to="{ name: 'ride', params: { id: r.id } }" class="title">{{ r.title }}</RouterLink>
+            <div class="facts">
+              <span
+                ><b class="num">{{ num(r.distance_km, 1) }}</b> km</span
+              >
+              <span
+                >↗ <b class="num">{{ num(r.elev_gain_m) }}</b> m</span
+              >
+              <span
+                >↘ <b class="num">{{ num(r.elev_loss_m) }}</b> m</span
+              >
+              <span
+                >max <b class="num">{{ r.max_grade == null ? '–' : fmtPct(r.max_grade) }}</b></span
+              >
+            </div>
+            <div v-if="terrainLabel(r)" class="terrain">
+              {{ terrainLabel(r) }} · <span class="num">{{ num(climbPerKm(r)) }}</span> m/km
+            </div>
+            <RouterLink v-if="r.video" :to="{ name: 'check', params: { id: r.id } }" class="check">
+              kontrola napárování
+            </RouterLink>
+          </div>
+        </li>
+      </ul>
+    </template>
   </main>
 </template>
 
@@ -82,7 +140,7 @@ onMounted(async () => {
 }
 header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
 }
@@ -90,12 +148,43 @@ h1 {
   font-size: 20px;
   margin: 0;
 }
+header nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
 .manage-link {
   font-size: 14px;
   color: var(--text-2);
 }
 .msg {
   color: var(--text-2);
+}
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chips button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.chips button[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 .tiles {
   list-style: none;
@@ -142,6 +231,16 @@ h1 {
   color: #fff;
   border-radius: 4px;
   padding: 2px 6px;
+}
+.badge.duration {
+  left: auto;
+  right: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.terrain {
+  font-size: 12px;
+  color: var(--text-2);
 }
 .body {
   padding: 10px 12px 12px;
